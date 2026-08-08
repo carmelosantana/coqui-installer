@@ -2,3 +2,7 @@
 *.swp
 *.swo
 *~
+
+# Local compose/smoke scaffold (may be root-owned after a container run)
+config/
+coqui-data/

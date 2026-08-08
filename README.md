@@ -1,125 +1,67 @@
 # Coqui Installer
 
-One liner for [Coqui](https://github.com/carmelosantana/coqui) — a terminal AI agent with multi-model orchestration.
+Run [Coqui](https://github.com/carmelosantana/coqui) — a terminal AI agent with multi-model orchestration — as a single Docker container: the CAP API and the Flutter web UI behind one port.
 
-## Install
+## Quick start (Docker — recommended)
 
-The installer downloads the latest GitHub release by default. No Git or Composer required.
+```bash
+mkdir coqui && cd coqui
+curl -fsSL https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/compose.yaml -o compose.yaml
+docker compose up -d
+```
 
-> Platform note: Linux, macOS, and WSL2 are the supported install paths. On Windows, use the PowerShell WSL2 bootstrap.
->
-> Deprecated native Windows scripts remain in the repository for at-risk users only. See [docs/NATIVE-WINDOWS-DEPRECATED.md](docs/NATIVE-WINDOWS-DEPRECATED.md).
+Then open <http://localhost:8080>.
 
-### Quick Install (Release)
+The image is `ghcr.io/carmelosantana/coqui`. Config lives in `./config/openclaw.json` (scaffolded on first run); sessions and workspace data persist in the `coqui-data` volume.
+
+> **Security — host-only by default.** The stack binds to `127.0.0.1` (loopback), so it is reachable only from this machine. The API is **unauthenticated**: to expose it on your LAN/server set `COQUI_BIND=0.0.0.0` (e.g. `COQUI_BIND=0.0.0.0 docker compose up -d`) and put it behind your own auth/reverse proxy — anyone who can reach the port can use the API.
+
+### Model backend (bring your own)
+
+No model runtime ships in the image. The default config points at host Ollama (`host.docker.internal:11434`). Edit `./config/openclaw.json` to point at a remote API provider instead. On Linux, the bundled `compose.yaml` already maps `host.docker.internal` via `host-gateway`.
+
+## Install script (optional wrapper)
+
+`install.sh` sets up the same Docker stack and adds a `coqui` command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/install.sh | bash
 ```
 
-### Windows (WSL2 Bootstrap)
+`coqui` commands:
 
-The Windows bootstrap checks for WSL2, offers to install Ubuntu when needed, and then runs the standard Coqui installer inside WSL.
+| Command         | Description                          |
+| --------------- | ------------------------------------ |
+| `coqui`         | Start the stack and print the URL    |
+| `coqui status`  | Show container status                |
+| `coqui stop`    | Stop the stack                       |
+| `coqui restart` | Restart the stack                    |
+| `coqui logs`    | Follow container logs                |
+| `coqui update`  | Pull the latest image and restart    |
 
-```powershell
-irm https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/install.ps1 | iex
-```
+## Native install (Linux/macOS fallback)
 
-### Inspect before running (Linux / macOS / WSL2)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/install.sh -o install.sh
-less install.sh
-bash install.sh
-```
-
-### Inspect before running (Windows bootstrap)
-
-```powershell
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/install.ps1 -OutFile install.ps1
-Get-Content install.ps1 | more
-.\install.ps1
-```
-
-## What It Does
-
-- Detects your OS and package manager (`apt`, `brew`, `dnf`, `yum`, `pacman`, `apk`, `nix`, `winget`)
-- Installs PHP 8.4+ plus the default Coqui extension set automatically when package-manager support is available
-- Downloads the latest Coqui release from GitHub (pre-built with dependencies)
-- Verifies the download with SHA-256 checksums
-- Adds the `coqui` command to your PATH
-
-On Windows, the PowerShell bootstrap also checks for WSL2 readiness and then delegates to the bash installer inside your WSL distro.
-
-## After Install
-
-`coqui` is the main entry point. It starts the full launcher-managed app: REPL in the foreground plus the API in the background.
+If Docker is not available, `install.sh` falls back to a native install (PHP 8.4 + the coqui extension set, release download with checksum verification). Force it with `--native`:
 
 ```bash
-coqui
-coqui --api-only
-coqui status
+./install.sh --native
 ```
 
-Coqui auto-discovers Composer toolkits and toolkit-provided REPL commands on boot. Install packages with `/space install <package>` or with Composer in your workspace, then restart Coqui to activate newly discovered tools and slash commands.
+`--dev` clones the git repo instead of downloading a release (needs Git + Composer). Native requirements: PHP 8.4+, extensions `dom mbstring pdo_sqlite xml` (plus `curl readline gd pcntl posix`).
 
-## Update
+### Install flags (native path)
 
-Re-run the install command. The installer detects existing installations and updates automatically:
+| Flag                 | Description                                       |
+| -------------------- | ------------------------------------------------- |
+| `--native`           | Skip the Docker path; install natively on this host |
+| `--dev`              | Use git clone instead of release download         |
+| `--install-php`      | Install/check PHP 8.4+ and required extensions    |
+| `--install-composer` | Install/check Composer                            |
+| `--install-coqui`    | Install/update Coqui and create the `coqui` symlink |
+| `--non-interactive`  | Skip all confirmation prompts (assume yes)        |
+| `--help`, `-h`       | Show usage                                        |
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/install.sh | bash
-```
-
-```powershell
-irm https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/install.ps1 | iex
-```
-
-## Development Mode
-
-Use `--dev` (bash) or `-Dev` (Windows bootstrap) to clone the git repository instead of downloading a release. This requires Git and Composer inside the target environment.
-
-### Linux / macOS / WSL2
-
-```bash
-./install.sh --dev
-```
-
-### Windows (WSL2 Bootstrap)
-
-```powershell
-.\install.ps1 -Dev
-```
-
-Dev mode uses `git clone` and `composer install`, which is useful for contributors or anyone who wants to modify Coqui's source.
-
-## Selective Install (Linux / macOS / WSL2)
-
-Install individual components with flags:
-
-```bash
-# PHP only (no prompts)
-./install.sh --install-php --non-interactive
-
-# PHP + Composer only
-./install.sh --install-php --install-composer
-
-# Coqui only (user has PHP already)
-./install.sh --install-coqui
-
-# Dev mode Coqui only
-./install.sh --install-coqui --dev
-```
-
-| Flag                 | Description                                     |
-| -------------------- | ----------------------------------------------- |
-| `--install-php`      | Install/check PHP 8.4+ and required extensions  |
-| `--install-composer` | Install/check Composer                          |
-| `--install-coqui`    | Install/update Coqui and create symlink         |
-| `--dev`              | Use git clone instead of release download       |
-| `--non-interactive`  | Skip all confirmation prompts (assume yes)      |
-| `--help`, `-h`       | Show usage                                      |
-
-## Configuration
+### Configuration (native path)
 
 Override defaults with environment variables:
 
@@ -129,83 +71,34 @@ Override defaults with environment variables:
 | `COQUI_REPO`        | GitHub repo URL | Git repository to clone from (dev mode only) |
 | `COQUI_VERSION`     | latest          | Release version or git branch/tag to install |
 
-Example:
-
 ```bash
 # Specific release version
-COQUI_VERSION=0.0.1 bash install.sh
+COQUI_VERSION=0.0.1 ./install.sh --native
 
 # Custom install directory
-COQUI_INSTALL_DIR=/opt/coqui bash install.sh
+COQUI_INSTALL_DIR=/opt/coqui ./install.sh --native
 ```
 
-## Requirements
+## Update
 
-- Linux or macOS
-- Windows 10/11 via WSL2
-- PHP 8.4 or later
-- Core extensions: `dom`, `mbstring`, `pdo_sqlite`, `xml`
-- Recommended extensions: `curl`, `readline`
-- Optional extensions: `gd` for bundled image previews; `pcntl` and `posix` for background task management (usually built into php-cli on Linux/macOS)
-- [Ollama](https://ollama.com) (recommended for local embeddings)
-
-Additional requirements for `--dev` mode only:
-
-- Composer 2.x
-- Git
+- Docker: `coqui update` (or `docker compose pull && docker compose up -d`).
+- Native: re-run `./install.sh --native`.
 
 ## Uninstall
-
-The uninstaller removes Coqui, its symlinks/wrappers, and PATH entries. By default it preserves workspace data and does **not** remove PHP or Composer.
-
-### Linux / macOS / WSL2 Uninstall
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/uninstall.sh | bash
 ```
 
-### Windows (WSL2 Bootstrap) Uninstall
+Preserves persistent data by default; pass `--remove-workspace` to delete it. On the Docker path that deletes the persistent `coqui-data` volume; on the native path it removes `~/.coqui/.workspace`.
 
-```powershell
-irm https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/uninstall.ps1 | iex
-```
-
-### Uninstall flags
-
-| Flag (bash)          | Flag (PowerShell)  | Description                                            |
-| -------------------- | ------------------ | ------------------------------------------------------ |
-| `--remove-workspace` | `-RemoveWorkspace` | Delete the workspace directory (`~/.coqui/.workspace`) |
-| `--force`            | `-Force`           | Skip all confirmation prompts                          |
-| `--all`              | Not supported      | Also remove PHP and Composer installed by Coqui        |
-| `--quiet`, `-q`      | `-Quiet`           | Minimal output                                         |
-| `--help`, `-h`       | `-Help`            | Show usage                                             |
-
-### Uninstall examples
-
-```bash
-# Interactive (workspace preserved by default)
-./uninstall.sh
-
-# Remove workspace data too
-./uninstall.sh --remove-workspace
-
-# Remove everything without prompts (workspace preserved)
-./uninstall.sh --force
-
-# Remove everything including PHP and Composer, no prompts
-./uninstall.sh --force --all
-```
-
-```powershell
-# Interactive (workspace preserved by default)
-.\uninstall.ps1
-
-# Remove workspace data too
-.\uninstall.ps1 -RemoveWorkspace
-
-# Skip confirmation prompts inside WSL
-.\uninstall.ps1 -Force
-```
+| Flag                 | Description                                       |
+| -------------------- | ------------------------------------------------- |
+| `--remove-workspace` | Delete persistent data (Docker: the `coqui-data` volume; native: `~/.coqui/.workspace`) |
+| `--force`            | Skip all confirmation prompts                     |
+| `--all`              | Also remove PHP and Composer installed by Coqui   |
+| `--quiet`, `-q`      | Minimal output                                    |
+| `--help`, `-h`       | Show usage                                        |
 
 ## License
 

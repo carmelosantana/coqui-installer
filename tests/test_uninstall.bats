@@ -167,6 +167,51 @@ UNINSTALL_SCRIPT="$SCRIPT_DIR/uninstall.sh"
     [ "$(echo "$output" | wc -l)" -le 3 ]
 }
 
+# ─── Docker stack teardown ────────────────────────────────────────────────────
+
+@test "uninstall_docker_stack runs compose down and removes the wrapper" {
+    STUB="$(mktemp -d)"
+    export COQUI_INSTALL_DIR="$(mktemp -d)/home"
+    mkdir -p "$COQUI_INSTALL_DIR"
+    echo "services: {}" > "$COQUI_INSTALL_DIR/compose.yaml"
+    export BIN_DIR="$(mktemp -d)/bin"; mkdir -p "$BIN_DIR"; touch "$BIN_DIR/coqui"; chmod +x "$BIN_DIR/coqui"
+    cat > "$STUB/docker" <<'EOF'
+#!/bin/sh
+echo "docker $*" >> "$RECORD"; exit 0
+EOF
+    chmod +x "$STUB/docker"; export RECORD="$STUB/record.txt"
+    run env PATH="$STUB:$PATH" bash -c '
+      source <(awk "NR>1 { print prev } { prev=\$0 }" uninstall.sh)
+      BIN_DIR="'"$BIN_DIR"'"
+      FORCE_MODE=true; REMOVE_WORKSPACE=false
+      uninstall_docker_stack
+    '
+    [ "$status" -eq 0 ]
+    grep -q 'compose .* down' "$RECORD"
+    [ ! -e "$BIN_DIR/coqui" ]
+    rm -rf "$STUB"
+}
+
+@test "uninstall_docker_stack passes -v only with --remove-workspace" {
+    STUB="$(mktemp -d)"
+    export COQUI_INSTALL_DIR="$(mktemp -d)/home"; mkdir -p "$COQUI_INSTALL_DIR"
+    echo "services: {}" > "$COQUI_INSTALL_DIR/compose.yaml"
+    export BIN_DIR="$(mktemp -d)/bin"; mkdir -p "$BIN_DIR"
+    cat > "$STUB/docker" <<'EOF'
+#!/bin/sh
+echo "docker $*" >> "$RECORD"; exit 0
+EOF
+    chmod +x "$STUB/docker"; export RECORD="$STUB/record.txt"
+    run env PATH="$STUB:$PATH" bash -c '
+      source <(awk "NR>1 { print prev } { prev=\$0 }" uninstall.sh)
+      BIN_DIR="'"$BIN_DIR"'"
+      FORCE_MODE=true; REMOVE_WORKSPACE=true
+      uninstall_docker_stack
+    '
+    grep -qE 'compose .* down .*-v|compose .* down.* --volumes' "$RECORD"
+    rm -rf "$STUB"
+}
+
 # ─── Installation detection ───────────────────────────────────────────────────
 
 @test "uninstall.sh is_dev_installed detects .git directory" {

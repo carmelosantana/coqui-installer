@@ -8,9 +8,6 @@
 #
 # Install with:
 #   curl -fsSL https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/install.sh | bash
-#
-# Windows (WSL2 bootstrap):
-#   irm https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/install.ps1 | iex
 
 set -euo pipefail
 
@@ -49,6 +46,12 @@ QUIET_MODE=false       # true when --quiet is passed (minimal output)
 SELECTIVE_MODE=false   # true when any --install-* flag is passed
 DEV_MODE=false         # true when --dev is passed (git clone instead of release)
 
+# ─── Docker preference (Docker is the primary install path) ──────────────────
+
+FORCE_NATIVE=0         # 1 when --native is passed (skip the Docker path)
+DOCKER_OK=0            # 1 when docker + compose v2 are usable
+DOCKER_NEEDS_SUDO=0    # 1 when docker only works via sudo
+
 # Resolved at runtime
 LATEST_VERSION=""
 
@@ -65,6 +68,8 @@ parse_args() {
                 INSTALL_COQUI=true; SELECTIVE_MODE=true; shift ;;
             --dev)
                 DEV_MODE=true; shift ;;
+            --native)
+                FORCE_NATIVE=1; shift ;;
             --non-interactive)
                 NON_INTERACTIVE=true; shift ;;
             --quiet|-q)
@@ -93,6 +98,7 @@ show_usage() {
     echo "  --install-php          Install/check PHP ${REQUIRED_PHP_MAJOR}.${REQUIRED_PHP_MINOR}+ and extensions"
     echo "  --install-composer     Install/check Composer"
     echo "  --install-coqui        Install/update Coqui and create symlink"
+    echo "  --native               Skip the Docker path; install natively on this host"
     echo "  --dev                  Use git clone instead of release download (for development)"
     echo "  --non-interactive      Skip all confirmation prompts (assume yes)"
     echo "  --quiet, -q            Minimal output (milestones and errors only)"
@@ -126,8 +132,6 @@ show_usage() {
     echo ""
     echo "  # Coqui only (user has PHP already)"
     echo "  ./install.sh --install-coqui"
-    echo ""
-    echo "Windows note: use the PowerShell WSL2 bootstrap or run this script inside WSL2."
 }
 
 # ─── Output helpers ──────────────────────────────────────────────────────────
@@ -265,6 +269,111 @@ detect_os() {
             fatal "Unsupported operating system: $OS. Coqui supports Linux and macOS."
             ;;
     esac
+}
+
+# ─── Docker detection ────────────────────────────────────────────────────────
+
+# Detect Docker Engine + Compose v2. Respects sudo: if docker only works under
+# sudo, DOCKER_OK still becomes 1 but DOCKER_NEEDS_SUDO is set so callers can
+# message the user (never silently sudo).
+detect_docker() {
+    DOCKER_OK=0
+    DOCKER_NEEDS_SUDO=0
+
+    if ! available docker; then
+        return 0
+    fi
+
+    # Does `docker compose` (v2 plugin) exist and does the daemon respond?
+    if docker compose version >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
+        DOCKER_OK=1
+        return 0
+    fi
+
+    # Daemon may require sudo (user not in docker group).
+    if [ -n "${SUDO:-}" ] && $SUDO docker compose version >/dev/null 2>&1 && $SUDO docker version >/dev/null 2>&1; then
+        DOCKER_OK=1
+        # shellcheck disable=SC2034  # consumed by the Docker path (Task 8)
+        DOCKER_NEEDS_SUDO=1
+        return 0
+    fi
+
+    return 0
+}
+
+docker_available() {
+    [ "${DOCKER_OK:-0}" = "1" ]
+}
+
+install_docker_stack() {
+    status "Setting up the Coqui Docker stack in ${COQUI_INSTALL_DIR}..."
+    mkdir -p "$COQUI_INSTALL_DIR/config"
+
+    local sudo_prefix=""
+    if [ "${DOCKER_NEEDS_SUDO:-0}" = "1" ]; then
+        sudo_prefix="sudo"
+        warn "Docker requires sudo on this machine. The 'coqui' wrapper will run docker with sudo."
+        warn "To avoid this, add your user to the 'docker' group and re-log in."
+    fi
+
+    # Resolve the directory holding the repo's compose.yaml + wrapper. Running
+    # as ./install.sh, BASH_SOURCE points at it; when the script is sourced or
+    # piped (curl | bash) BASH_SOURCE may resolve to a pipe/fd, so fall back to
+    # $PWD — but only when BOTH files are present together, which reliably marks
+    # a real checkout and avoids grabbing an unrelated compose.yaml from cwd.
+    local script_dir=""
+    if [ -n "${BASH_SOURCE:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    fi
+    local src_dir=""
+    if [ -n "$script_dir" ] && [ -f "$script_dir/compose.yaml" ] && [ -f "$script_dir/coqui.wrapper.sh" ]; then
+        src_dir="$script_dir"
+    elif [ -f "$PWD/compose.yaml" ] && [ -f "$PWD/coqui.wrapper.sh" ]; then
+        src_dir="$PWD"
+    fi
+
+    # compose.yaml — copy from repo if present, else download the canonical file.
+    if [ -n "$src_dir" ]; then
+        cp "$src_dir/compose.yaml" "$COQUI_INSTALL_DIR/compose.yaml"
+    else
+        curl -fsSL "https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/compose.yaml" \
+            -o "$COQUI_INSTALL_DIR/compose.yaml" \
+            || fatal "Could not obtain compose.yaml"
+    fi
+
+    # coqui wrapper — same source resolution.
+    [ -z "${BIN_DIR:-}" ] && detect_bin_dir
+    mkdir -p "$BIN_DIR"
+    if [ -n "$src_dir" ]; then
+        cp "$src_dir/coqui.wrapper.sh" "$BIN_DIR/coqui"
+    else
+        curl -fsSL "https://raw.githubusercontent.com/carmelosantana/coqui-installer/main/coqui.wrapper.sh" \
+            -o "$BIN_DIR/coqui" \
+            || fatal "Could not obtain the coqui wrapper"
+    fi
+    chmod +x "$BIN_DIR/coqui"
+
+    # Bake COQUI_HOME + optional sudo into the installed wrapper so it is self-contained.
+    {
+        echo "#!/usr/bin/env bash"
+        echo "export COQUI_HOME=\"$COQUI_INSTALL_DIR\""
+        [ -n "$sudo_prefix" ] && echo "export COQUI_SUDO=\"$sudo_prefix\""
+        tail -n +2 "$BIN_DIR/coqui"
+    } > "$BIN_DIR/coqui.tmp" && mv "$BIN_DIR/coqui.tmp" "$BIN_DIR/coqui"
+    chmod +x "$BIN_DIR/coqui"
+
+    # Pull + start (skipped cleanly if the fake docker in tests is a no-op).
+    status "Pulling the Coqui image and starting the stack..."
+    # shellcheck disable=SC2086  # intentional word-splitting on the sudo prefix
+    ${sudo_prefix} docker compose -f "$COQUI_INSTALL_DIR/compose.yaml" pull || true
+    # shellcheck disable=SC2086  # intentional word-splitting on the sudo prefix
+    ${sudo_prefix} docker compose -f "$COQUI_INSTALL_DIR/compose.yaml" up -d \
+        || fatal "docker compose up failed"
+
+    success "Coqui is running — open http://localhost:8080"
+    if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
+        warn "${BIN_DIR} is not in your PATH; add it to use the 'coqui' command."
+    fi
 }
 
 # ─── PHP checks ──────────────────────────────────────────────────────────────
@@ -1088,6 +1197,21 @@ main() {
 
     detect_os
     setup_sudo
+
+    # ── Install-path selection ─────────────────────────────────────────────
+    # Docker is primary. Fall back to native when forced (--native), when a
+    # selective --install-* flag is given (you cannot --install-php into a
+    # container, so a selective flag implies the native path), or when Docker
+    # is unavailable.
+    if [ "${FORCE_NATIVE:-0}" != "1" ] && [ "$SELECTIVE_MODE" != true ]; then
+        detect_docker
+        if docker_available; then
+            install_docker_stack    # implemented in Task 8
+            return 0
+        fi
+        warn "Docker (with 'docker compose') was not found — falling back to the native install."
+        warn "Install Docker for the recommended experience, or pass --native to silence this."
+    fi
 
     # ── Selective mode: run only the requested components ──
     if [ "$SELECTIVE_MODE" = true ]; then

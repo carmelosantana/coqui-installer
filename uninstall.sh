@@ -152,6 +152,25 @@ setup_sudo() {
     fi
 }
 
+# Detect the best writable bin directory in PATH (mirrors install.sh).
+# Never selects a directory that requires sudo — falls back to ~/.local/bin.
+detect_bin_dir() {
+    # Apple Silicon Homebrew (/opt/homebrew/bin) — user-owned, no sudo needed
+    if echo "$PATH" | tr ':' '\n' | grep -qx '/opt/homebrew/bin' && [ -w '/opt/homebrew/bin' ]; then
+        BIN_DIR="/opt/homebrew/bin"
+        return
+    fi
+
+    # Intel Homebrew / user-owned /usr/local/bin
+    if echo "$PATH" | tr ':' '\n' | grep -qx '/usr/local/bin' && [ -w '/usr/local/bin' ]; then
+        BIN_DIR="/usr/local/bin"
+        return
+    fi
+
+    # Safe user-local fallback — always writable, no sudo required
+    BIN_DIR="$HOME/.local/bin"
+}
+
 # ─── OS detection ────────────────────────────────────────────────────────────
 
 # shellcheck disable=SC2034
@@ -316,6 +335,41 @@ remove_install_dir() {
             success "Removed ${COQUI_INSTALL_DIR}"
         fi
     fi
+}
+
+# ─── Docker stack teardown ───────────────────────────────────────────────────
+
+# Tear down a Docker install (compose.yaml in the install dir). Mirrors the
+# workspace-preservation contract: the persistent data volume is kept unless
+# --remove-workspace (REMOVE_WORKSPACE=true) is passed.
+uninstall_docker_stack() {
+    local compose_file="${COQUI_INSTALL_DIR}/compose.yaml"
+    [ -f "$compose_file" ] || return 1   # not a Docker install
+
+    status "Stopping the Coqui Docker stack..."
+    local down_args="down"
+    if [ "$REMOVE_WORKSPACE" = true ]; then
+        down_args="down -v"
+        warn "Removing the persistent data volume (sessions will be lost)."
+    fi
+    # shellcheck disable=SC2086
+    docker compose -f "$compose_file" $down_args || warn "docker compose down failed (continuing)."
+
+    # Remove the installed wrapper. Respect a caller-provided BIN_DIR; otherwise
+    # detect the same writable bin dir the installer would have used.
+    [ -z "${BIN_DIR:-}" ] && detect_bin_dir
+    if [ -n "${BIN_DIR:-}" ] && [ -e "${BIN_DIR}/coqui" ]; then
+        rm -f "${BIN_DIR}/coqui"
+        success "Removed the coqui wrapper."
+    fi
+
+    # Remove scaffolded compose/config; keep workspace data unless requested.
+    rm -f "$compose_file"
+    if [ "$REMOVE_WORKSPACE" = true ]; then
+        rm -rf "${COQUI_INSTALL_DIR}/config"
+    fi
+    success "Docker stack removed."
+    return 0
 }
 
 # ─── PHP removal ────────────────────────────────────────────────────────────
@@ -538,6 +592,11 @@ main() {
             exit 0
         fi
         echo ""
+    fi
+
+    # Docker install? Tear down the stack and skip the native removal flow.
+    if [ -f "${COQUI_INSTALL_DIR}/compose.yaml" ]; then
+        uninstall_docker_stack && { print_summary; return 0; }
     fi
 
     # 1. Remove symlinks from bin directories

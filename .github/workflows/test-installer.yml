@@ -6,10 +6,6 @@ on:
     paths:
       - "install.sh"
       - "uninstall.sh"
-      - "install.ps1"
-      - "install-native.ps1"
-      - "uninstall.ps1"
-      - "uninstall-native.ps1"
       - "tests/**"
       - ".github/workflows/test-installer.yml"
   pull_request:
@@ -17,10 +13,6 @@ on:
     paths:
       - "install.sh"
       - "uninstall.sh"
-      - "install.ps1"
-      - "install-native.ps1"
-      - "uninstall.ps1"
-      - "uninstall-native.ps1"
       - "tests/**"
       - ".github/workflows/test-installer.yml"
 
@@ -46,52 +38,6 @@ jobs:
       - name: Lint uninstall.sh
         run: shellcheck --severity=warning uninstall.sh
 
-  lint-powershell:
-    name: PSScriptAnalyzer
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install PSScriptAnalyzer
-        shell: pwsh
-        run: Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
-
-      - name: Analyse install.ps1
-        shell: pwsh
-        run: |
-          $results = Invoke-ScriptAnalyzer -Path install.ps1 -Settings .github/PSScriptAnalyzerSettings.psd1 -Severity Warning,Error
-          if ($results) {
-            $results | Format-Table -AutoSize
-            exit 1
-          }
-
-      - name: Analyse install-native.ps1
-        shell: pwsh
-        run: |
-          $results = Invoke-ScriptAnalyzer -Path install-native.ps1 -Settings .github/PSScriptAnalyzerSettings.psd1 -Severity Warning,Error
-          if ($results) {
-            $results | Format-Table -AutoSize
-            exit 1
-          }
-
-      - name: Analyse uninstall.ps1
-        shell: pwsh
-        run: |
-          $results = Invoke-ScriptAnalyzer -Path uninstall.ps1 -Settings .github/PSScriptAnalyzerSettings.psd1 -Severity Warning,Error
-          if ($results) {
-            $results | Format-Table -AutoSize
-            exit 1
-          }
-
-      - name: Analyse uninstall-native.ps1
-        shell: pwsh
-        run: |
-          $results = Invoke-ScriptAnalyzer -Path uninstall-native.ps1 -Settings .github/PSScriptAnalyzerSettings.psd1 -Severity Warning,Error
-          if ($results) {
-            $results | Format-Table -AutoSize
-            exit 1
-          }
-
 # ─── Bash tests (Linux) ───────────────────────────────────────────────────────
 
   test-linux:
@@ -106,11 +52,16 @@ jobs:
           git clone --depth 1 https://github.com/bats-core/bats-core.git /tmp/bats-core
           sudo /tmp/bats-core/install.sh /usr/local
 
-      - name: Run install tests
-        run: bats --tap tests/test_install.bats
-
-      - name: Run uninstall tests
-        run: bats --tap tests/test_uninstall.bats
+      - name: Run bats test suites
+        run: |
+          bats --tap tests/test_install.bats
+          bats --tap tests/test_uninstall.bats
+          bats --tap tests/test_wrapper.bats
+          bats --tap tests/test_no_powershell.bats
+          bats --tap tests/test_fetch_coqui.bats
+          bats --tap tests/test_fetch_web.bats
+          bats --tap tests/test_entrypoint.bats
+          bats --tap tests/test_compose.bats
 
 # ─── Bash tests (macOS) ───────────────────────────────────────────────────────
 
@@ -124,93 +75,30 @@ jobs:
       - name: Install bats-core
         run: brew install bats-core
 
-      - name: Run install tests
-        run: bats --tap tests/test_install.bats
-
-      - name: Run uninstall tests
-        run: bats --tap tests/test_uninstall.bats
-
-# ─── PowerShell tests (Windows) ───────────────────────────────────────────────
-
-  test-windows:
-    name: PowerShell tests (Windows)
-    runs-on: windows-latest
-    needs: [lint-powershell]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Pester
-        shell: pwsh
+      - name: Run bats test suites
         run: |
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -Scope CurrentUser
-
-      - name: Run install tests
-        shell: pwsh
-        run: |
-          $config = New-PesterConfiguration
-          $config.Run.Path = "tests/test_install.ps1"
-          $config.Output.Verbosity = "Detailed"
-          $config.TestResult.Enabled = $true
-          $config.TestResult.OutputPath = "test-results-install.xml"
-          $result = Invoke-Pester -Configuration $config
-          if ($result.FailedCount -gt 0) { exit 1 }
-
-      - name: Run install native tests
-        shell: pwsh
-        run: |
-          $config = New-PesterConfiguration
-          $config.Run.Path = "tests/test_install_native.ps1"
-          $config.Output.Verbosity = "Detailed"
-          $config.TestResult.Enabled = $true
-          $config.TestResult.OutputPath = "test-results-install-native.xml"
-          $result = Invoke-Pester -Configuration $config
-          if ($result.FailedCount -gt 0) { exit 1 }
-
-      - name: Run uninstall tests
-        shell: pwsh
-        run: |
-          $config = New-PesterConfiguration
-          $config.Run.Path = "tests/test_uninstall.ps1"
-          $config.Output.Verbosity = "Detailed"
-          $config.TestResult.Enabled = $true
-          $config.TestResult.OutputPath = "test-results-uninstall.xml"
-          $result = Invoke-Pester -Configuration $config
-          if ($result.FailedCount -gt 0) { exit 1 }
-
-      - name: Run uninstall native tests
-        shell: pwsh
-        run: |
-          $config = New-PesterConfiguration
-          $config.Run.Path = "tests/test_uninstall_native.ps1"
-          $config.Output.Verbosity = "Detailed"
-          $config.TestResult.Enabled = $true
-          $config.TestResult.OutputPath = "test-results-uninstall-native.xml"
-          $result = Invoke-Pester -Configuration $config
-          if ($result.FailedCount -gt 0) { exit 1 }
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-test-results
-          path: "*.xml"
+          bats --tap tests/test_install.bats
+          bats --tap tests/test_uninstall.bats
+          bats --tap tests/test_wrapper.bats
+          bats --tap tests/test_no_powershell.bats
+          bats --tap tests/test_fetch_coqui.bats
+          bats --tap tests/test_fetch_web.bats
+          bats --tap tests/test_entrypoint.bats
+          bats --tap tests/test_compose.bats
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 
   all-tests-passed:
     name: All tests passed
     runs-on: ubuntu-latest
-    needs: [lint-shell, lint-powershell, test-linux, test-macos, test-windows]
+    needs: [lint-shell, test-linux, test-macos]
     if: always()
     steps:
       - name: Check results
         run: |
-          if [[ "${{ needs.lint-shell.result }}"      != "success" ]] || \
-             [[ "${{ needs.lint-powershell.result }}" != "success" ]] || \
-             [[ "${{ needs.test-linux.result }}"      != "success" ]] || \
-             [[ "${{ needs.test-macos.result }}"      != "success" ]] || \
-             [[ "${{ needs.test-windows.result }}"    != "success" ]]; then
+          if [[ "${{ needs.lint-shell.result }}" != "success" ]] || \
+             [[ "${{ needs.test-linux.result }}" != "success" ]] || \
+             [[ "${{ needs.test-macos.result }}" != "success" ]]; then
             echo "One or more jobs failed."
             exit 1
           fi

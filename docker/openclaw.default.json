@@ -1,0 +1,13 @@
+{
+  "agents": {
+    "defaults": {
+      "model": { "primary": "ollama/llama3.1" },
+      "roles": { "orchestrator": "ollama/llama3.1" }
+    }
+  },
+  "models": {
+    "providers": {
+      "ollama": { "baseUrl": "http://host.docker.internal:11434" }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+# Canonical, wrapper-free Coqui stack.
+#   docker compose up   →   open http://localhost:8080
+#
+# Model backend is BYO. The default config (scaffolded on first run) points at
+# host Ollama via host.docker.internal:11434; edit ./config/openclaw.json to use
+# a remote API provider instead.
+services:
+  coqui:
+    image: ghcr.io/carmelosantana/coqui:${COQUI_TAG:-latest}
+    ports:
+      # Host-only by default: the stack is reachable at http://localhost:8080 on
+      # this machine only. The API is UNAUTHENTICATED, so it is not published to
+      # the LAN. To expose it on your LAN/server set COQUI_BIND=0.0.0.0 (and put
+      # it behind your own auth/reverse proxy — anyone who can reach the port
+      # can use the API).
+      - "${COQUI_BIND:-127.0.0.1}:${COQUI_PORT:-8080}:8080"
+    volumes:
+      - ./config:/config
+      - coqui-data:/data
+    environment:
+      # Override the published proxy port inside the container if you remap it.
+      CADDY_PORT: "8080"
+    # Linux: make host.docker.internal resolve to the host so the default
+    # Ollama pointer works. (Docker Desktop on macOS/Windows provides this.)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  coqui-data:

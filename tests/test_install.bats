@@ -36,9 +36,9 @@ INSTALL_SCRIPT="$SCRIPT_DIR/install.sh"
     echo "$output" | grep -q -- "--non-interactive"
 }
 
-@test "install.sh --help points Windows users to the WSL2 bootstrap" {
+@test "install.sh --help has no PowerShell/WSL bootstrap reference" {
     run bash "$INSTALL_SCRIPT" --help
-    echo "$output" | grep -q "PowerShell WSL2 bootstrap"
+    ! echo "$output" | grep -qiE 'powershell|WSL2 bootstrap|\.ps1'
 }
 
 @test "install.sh declares dom as a required extension" {
@@ -337,4 +337,104 @@ INSTALL_SCRIPT="$SCRIPT_DIR/install.sh"
     [ "$(cat "$test_dir/.coqui-version")" = "0.0.1" ]
 
     rm -rf "$test_dir" "$stage" "$(dirname "$archive")"
+}
+
+# ─── Docker detection + --native dispatch ─────────────────────────────────────
+
+@test "parse_args accepts --native and sets FORCE_NATIVE" {
+    run bash -c '
+      source <(awk "NR>1 { print prev } { prev=\$0 }" install.sh)
+      parse_args --native
+      echo "FORCE_NATIVE=$FORCE_NATIVE"
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"FORCE_NATIVE=1"* ]]
+}
+
+@test "docker_available reflects DOCKER_OK" {
+    run bash -c '
+      source <(awk "NR>1 { print prev } { prev=\$0 }" install.sh)
+      DOCKER_OK=1; docker_available && echo yes || echo no
+      DOCKER_OK=0; docker_available && echo yes || echo no
+    '
+    [ "$status" -eq 0 ]
+    [[ "${lines[0]}" == "yes" ]]
+    [[ "${lines[1]}" == "no" ]]
+}
+
+@test "detect_docker sets DOCKER_OK=1 when docker+compose present" {
+    STUB="$(mktemp -d)"
+    cat > "$STUB/docker" <<'EOF'
+#!/bin/sh
+# `docker compose version` succeeds; `docker version` succeeds.
+[ "$1" = "compose" ] && { echo "Docker Compose version v2.29.0"; exit 0; }
+exit 0
+EOF
+    chmod +x "$STUB/docker"
+    # Prepend stub dir so the fake docker wins.
+    PATH="$STUB:$PATH" run bash -c '
+      source <(awk "NR>1 { print prev } { prev=\$0 }" install.sh)
+      detect_docker
+      echo "DOCKER_OK=$DOCKER_OK"
+    '
+    [[ "$output" == *"DOCKER_OK=1"* ]]
+    rm -rf "$STUB"
+}
+
+@test "detect_docker sets DOCKER_OK=0 when docker missing" {
+    # Restrict PATH to a stub dir holding only the tools the sourced script
+    # needs (bash + awk) so a real `docker` on the host cannot be found.
+    STUB="$(mktemp -d)"
+    ln -s "$(command -v bash)" "$STUB/bash"
+    ln -s "$(command -v awk)"  "$STUB/awk"
+    PATH="$STUB" run bash -c '
+      source <(awk "NR>1 { print prev } { prev=\$0 }" install.sh)
+      detect_docker
+      echo "DOCKER_OK=$DOCKER_OK"
+    '
+    [[ "$output" == *"DOCKER_OK=0"* ]]
+    rm -rf "$STUB"
+}
+
+@test "a selective --install-* flag skips the Docker path even when Docker is available" {
+    run env INSTALL_SCRIPT="$INSTALL_SCRIPT" bash -c '
+      src=$(mktemp)
+      awk "NR>1 { print prev } { prev=\$0 }" "$INSTALL_SCRIPT" > "$src"
+      source "$src"
+      # Neutralize environment probing so main() reaches the dispatch decision.
+      show_banner() { :; }
+      detect_os() { :; }
+      setup_sudo() { :; }
+      detect_docker() { DOCKER_OK=1; }   # pretend Docker is present + usable
+      install_docker_stack() { echo "DOCKER_PATH_TAKEN"; }
+      # Stub the native selective work so we can observe which path ran.
+      check_php() { echo "NATIVE_PATH_TAKEN"; }
+      check_extensions() { :; }
+      check_opcache() { :; }
+      main --install-php --non-interactive
+    '
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q "NATIVE_PATH_TAKEN"
+    ! echo "$output" | grep -q "DOCKER_PATH_TAKEN"
+}
+
+@test "install_docker_stack scaffolds compose + config + wrapper" {
+    STUB="$(mktemp -d)"
+    export COQUI_INSTALL_DIR="$(mktemp -d)/home"
+    export BIN_DIR="$(mktemp -d)/bin"
+    cat > "$STUB/docker" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+    chmod +x "$STUB/docker"
+    run env PATH="$STUB:$PATH" bash -c '
+      source <(awk "NR>1 { print prev } { prev=\$0 }" install.sh)
+      DOCKER_OK=1; DOCKER_NEEDS_SUDO=0
+      BIN_DIR="'"$BIN_DIR"'"
+      install_docker_stack
+    '
+    [ "$status" -eq 0 ]
+    [ -f "$COQUI_INSTALL_DIR/compose.yaml" ]
+    [ -d "$COQUI_INSTALL_DIR/config" ]
+    [ -x "$BIN_DIR/coqui" ]
 }
