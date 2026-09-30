@@ -7,7 +7,7 @@
   },
   "models": {
     "providers": {
-      "ollama": { "baseUrl": "http://host.docker.internal:11434" }
+      "ollama": { "baseUrl": "http://host.docker.internal:11434/v1" }
     }
   }
 }
